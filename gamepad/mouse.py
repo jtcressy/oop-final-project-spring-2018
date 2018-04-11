@@ -9,7 +9,7 @@ class Mouse:
     BUTTON_5 = BUTTON_BACK
 
     def click(self, button):
-        ""
+        """Click mouse button"""
 
     def move(self, x, y):
         """move mouse to absolute"""
