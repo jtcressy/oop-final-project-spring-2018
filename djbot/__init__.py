@@ -11,14 +11,26 @@ import djbot.cogs
 
 MODULE_EXTENSIONS = ('.py', '.pyc', '.pyo')
 
+
+#
+# BOT SETTINGS
+#
+
 description = '''DJ Bot - Queue up music in a voice channel'''
+command_prefix = "\\"
 
 DISABLED_COGS = [
     'djbot.cogs.dj',
 ]
 
-bot = commands.Bot(command_prefix="\\", description=description)
+#
+# END SETTINGS
+#
+
+
+bot = commands.Bot(command_prefix=command_prefix, description=description)
 app_info = bot.application_info()
+
 
 def logger_setup(cog_name="nsabot", log_level=logging.INFO):
     logger = logging.getLogger(cog_name)
