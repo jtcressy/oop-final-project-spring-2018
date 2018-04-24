@@ -17,7 +17,7 @@ MODULE_EXTENSIONS = ('.py', '.pyc', '.pyo')
 #
 
 description = '''DJ Bot - Queue up music in a voice channel'''
-command_prefix = "\\"
+command_prefix = environ.get("BOT_CMD_PREFIX", "\\")
 
 DISABLED_COGS = [
     'djbot.cogs.dj',
