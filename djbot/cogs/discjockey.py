@@ -56,6 +56,7 @@ class DiscJockey:
         entry = {
             'name' : name,
             'url': url,
+            'desc': desc,
             'createdby': ctx.message.author.id,
             'datecreated': datetime.datetime.now()
         }
@@ -64,6 +65,22 @@ class DiscJockey:
         elif bool(urllib.parse.urlparse(url).scheme):  # make sure url is a parsable url
             self.saved_music.insert_one(entry)
             await self.bot.say(f"Saved {name} to the music collection.")
+
+    @discjockey.command(pass_context=True)
+    @commands.has_any_role("Admin", "Admins", "Moderator", "Moderators")
+    async def delete(self, ctx, name, url, desc=""):
+        """Delete a song from the music collection"""
+        # TODO
+
+    @discjockey.command(pass_context=True)
+    async def info(self, ctx, name):
+        """Get details about a song in the music collection"""
+        # TODO: Tabulate the output to make it pretty
+
+    @discjockey.command(pass_context=True)
+    async def list(self, ctx):
+        """List available songs in the music collection"""
+        # TODO
 
     @discjockey.command(pass_context=True)
     @is_in_voice_channel()
