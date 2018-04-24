@@ -32,7 +32,7 @@ bot = commands.Bot(command_prefix=command_prefix, description=description)
 app_info = bot.application_info()
 
 
-def logger_setup(cog_name="nsabot", log_level=logging.INFO):
+def logger_setup(cog_name=__name__, log_level=logging.INFO):
     logger = logging.getLogger(cog_name)
     loghandler = logging.StreamHandler(stream=sys.stdout)
     logfilehandler = logging.FileHandler(f"{cog_name}.log", mode="a", encoding="utf-8")
