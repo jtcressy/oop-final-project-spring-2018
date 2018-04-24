@@ -1,4 +1,5 @@
 import discord
+import datetime
 import logging
 from pymongo.errors import DuplicateKeyError
 import pymongo
@@ -29,6 +30,21 @@ class DiscJockey:
     @discjockey.command(pass_context=True)
     async def save(self, ctx, name, url, desc=""):
         """Save a song to the music collection"""
+        entry = {
+            'name' : name,
+            'url': url,
+            'createdby': ctx.message.author.id,
+            'datecreated': datetime.datetime.now()
+        }
+        if self.saved_music.find_one({'name': entry.get('name')}):
+            await self.bot.say("That song is already saved.")
+        else:
+            #EVALUATE IF URL IS VALID
+            self.saved_music.insert_one(entry)
+            await self.bot.say(f"Saved {name} to the list.")
+
+
+
 
 def setup(bot):
     bot.add_cog(DiscJockey(bot))
