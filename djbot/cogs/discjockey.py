@@ -1,4 +1,5 @@
 import discord
+import datetime
 import logging
 from pymongo.errors import DuplicateKeyError
 import pymongo
@@ -32,30 +33,22 @@ class DiscJockey:
                     voice_client = self.bot.voice_client_in(ctx.message.server)
 
     @discjockey.command(pass_context=True)
-    async def play(self, ctx, name):
-        request = self.saved_music.find_one({'name': name})  # attempt to fetch the requested music
-        if request is not None:  # check if it found an entry
-            # enqueue the requested music entry from database
-            ""
-        elif bool(urllib.parse.urlparse(name).scheme):  # else, check if name is a URL
-            ""
+    async def save(self, ctx, name, url, desc=""):
+        """Save a song to the music collection"""
+        entry = {
+            'name' : name,
+            'url': url,
+            'createdby': ctx.message.author.id,
+            'datecreated': datetime.datetime.now()
+        }
+        if self.saved_music.find_one({'name': entry.get('name')}):
+            await self.bot.say("That song is already saved.")
         else:
-            await self.bot.send_message(ctx.message.channel, "Either that peice of music doesnt exist or the url is invalid")
+            #EVALUATE IF URL IS VALID
+            self.saved_music.insert_one(entry)
+            await self.bot.say(f"Saved {name} to the list.")
 
-    async def next(self, ctx):
-        """Play the next music in the queue"""
 
-    async def ytdl(self, ctx, url, after=None):
-        try:
-            await self.bot.join_voice_channel(ctx.message.author.voice.voice_channel)
-            self.players[ctx.message.server.id] = await self.bot.voice_client_in(ctx.message.server).create_ytdl_player(
-                url,
-                after=after
-            )
-            self.players[ctx.message.server.id].start()
-            self.players[ctx.message.server.id].volume = 0.10
-        except discord.errors.ClientException as e:
-            await self.bot.send_message(ctx.message.channel, content=str(e))
 
 
 def setup(bot):
