@@ -5,30 +5,18 @@ import urllib.parse
 import discord
 import discord.utils
 import pymongo
+import tabulate
 import youtube_dl
 from discord.ext import commands
 
 from djbot import logger_setup, get_dbclient
 
-
-# Check decorator to see if the user is in the voice channel that the bot is in
-# also pass if there is no voice channel
-def is_in_voice_channel():
-    def predicate(ctx):
-        voice_client = ctx.message.guild.voice_client
-        return voice_client is None or ctx.message.author.voice.channel.id == voice_client.channel.id
-
-    return commands.check(predicate)
+EMOJIS = {
+    "success": "✅",
+    "fail": "🛑"
+}
 
 
-def typing(fn):
-    """Decorator to make bot send typing during command execution"""
-
-    async def predicate(*args, **kwargs):
-        async with ctx.typing():
-            fn()
-
-    return predicate
 
 
 # Suppress noise about console usage from errors
@@ -78,6 +66,25 @@ class YTDLSource(discord.PCMVolumeTransformer):
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
 
+#
+# Command checks and errors
+#
+# Check decorator to see if the user is in the voice channel that the bot is in
+# also pass if there is no voice channel
+def is_in_voice_channel():
+    def predicate(ctx):
+        voice_client = ctx.message.guild.voice_client
+        if voice_client is None or not ctx.message.author.voice.channel.id == voice_client.channel.id:
+            raise NotInVoiceChannel("You cant use this command outside of the voice channel!")
+        return True
+
+    return commands.check(predicate)
+
+
+class NotInVoiceChannel(commands.CheckFailure):
+    pass
+
+
 class DiscJockey:
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -96,29 +103,37 @@ class DiscJockey:
 
     @commands.group(name="dj")
     async def discjockey(self, ctx):
-        import tabulate
         """Disc Jockey commands"""
         self.music_queue = self.db.get_collection(f"{ctx.message.guild.id}-music_queue")
         self.saved_music = self.db.get_collection(f"{ctx.message.guild.id}-saved_music")
         if ctx.invoked_subcommand is None:
-            queue = self.music_queue.find(sort=[('createdOn', 1)])
-            headers = ["Name", "Description", "Played", "Playing"]
-            rows = []
-            self.logger.debug(f"Current music queue for {ctx.message.guild.name}:")
-            for job in queue:
-                self.logger.debug(str(job))
-                playing = False
-                played = False
-                if job['startTime'] is not None:
-                    played = True
-                    playing = True
-                    if job['endTime'] is not None:
-                        playing = False
-                rows.append([job['payload']['name'], job['payload']['desc'], str(played), str(playing)])
-            output = tabulate.tabulate(rows, headers)
-            await ctx.message.channel.send("```" + output + "```")
+            async with ctx.message.channel.typing():
+                queue = self.music_queue.find(sort=[('createdOn', 1)])
+                headers = ["Name", "Description", "Length", "Elapsed"]
+                rows = []
+                self.logger.debug(f"Current music queue for {ctx.message.guild.name}:")
+                for job in queue:
+                    self.logger.debug(job['payload']['name'])
+                    self.logger.debug(job['payload']['metadata'].keys())
+                    rows.append(
+                        [
+                            job['payload']['name'],
+                            job['payload']['desc'],
+                            job['payload']['metadata']['duration'],
+                            "N/A"
+                        ]
 
-    @discjockey.command(pass_context=True)
+                    )
+                output = tabulate.tabulate(rows, headers)
+                await ctx.message.channel.send("```" + output + "```")
+
+    @discjockey.error
+    async def discjockey_error(self, ctx, error):
+        self.logger.debug(f"Got error {error}")
+        if isinstance(error, NotInVoiceChannel):
+            await ctx.send(error)
+
+    @discjockey.command()
     async def save(self, ctx, name, url, desc=""):
         """
         Save a song to the music collection
@@ -126,59 +141,78 @@ class DiscJockey:
         :param url: URL that points to playable media
         :param desc: Optional: Describe the song
         """
-        entry = {
-            'name' : name,
-            'url': url,
-            'desc': desc,
-            'createdby': ctx.message.author.id,
-            'datecreated': datetime.datetime.now()
-        }
-        if self.saved_music.find_one({'name': entry.get('name')}):
-            botmsg = await self.bot.say("That song is already saved.")
-        elif bool(urllib.parse.urlparse(url).scheme):  # make sure url is a parsable url
-            self.saved_music.insert_one(entry)
-            botmsg = await self.bot.say(f"Saved {name} to the music collection.")
+        outmsg = None
+        async with ctx.message.channel.typing():
+            ytdl_result = ytdl.extract_info(url, download=False)
+            entry = {
+                'name': name,
+                'url': url,
+                'desc': ytdl_result['title'] if desc is None else desc,
+                'createdby': ctx.message.author.id,
+                'datecreated': datetime.datetime.now(),
+                'metadata': ytdl_result
+            }
+            if self.saved_music.find_one({'name': entry.get('name')}):
+                outmsg = await ctx.message.channel.send(f"{EMOJIS['fail']}That song is already saved.")
+            elif bool(urllib.parse.urlparse(url).scheme):  # make sure url is a parsable url
+                self.saved_music.insert_one(entry)
+                outmsg = await ctx.message.channel.send(f"{EMOJIS['success']}Saved {name} to the music collection.")
+        self.del_msgs(
+            ctx.message,
+            outmsg
+        )
 
-
-    @discjockey.command(pass_context=True)
+    @discjockey.command()
     @commands.has_any_role("Admin", "Admins", "Moderator", "Moderators")
     async def delete(self, ctx, name):
         """
         Delete a song from the music collection
         :param name: Name of song in music collection
         """
+        async with ctx.message.channel.typing():
+            ""
         # TODO
 
-    @discjockey.command(pass_context=True)
+    @discjockey.command()
     async def info(self, ctx, name):
         """
         Get details about a song in the music collection
         :param name: Name of song in music collection
         """
+        async with ctx.message.channel.typing():
+            ""
         # TODO: Tabulate the output to make it pretty
 
-    @discjockey.command(pass_context=True)
+    @discjockey.command()
     async def list(self, ctx):
         """List available songs in the music collection"""
+        async with ctx.message.channel.typing():
+            ""
         # TODO
 
-    @discjockey.command(pass_context=True)
+    @discjockey.command()
     @is_in_voice_channel()
     async def play(self, ctx, name_or_url=None):
         """
-        Play or enqueue a song by name or url, or just resume playing original queue
+        Play or enqueue a song by name or url
         :param name_or_url: Optional, name of song or url
         """
-        if name_or_url:
-            self.enq(ctx, name_or_url)  # "play" is a wrapper for "enq" if you pass it a name or url to play
-        # finally, if there is no music playing call self.next() to play the queue
-        vc = ctx.message.guild.voice_client
-        if vc is None or not vc.is_connected() or not vc.is_playing():
-            await self.next(ctx)
-            # TODO: Send a message stating that the player was successful
-        else:  # In this case, there is already a player, so we say we cant find that music to enqueue
-            await self.bot.send_message(ctx.message.channel,
-                                        "Either that peice of music doesnt exist or the url is invalid")
+        outmsg = None
+        async with ctx.message.channel.typing():
+            if name_or_url:
+                self.enq(ctx, name_or_url)  # "play" is a wrapper for "enq" if you pass it a name or url to play
+            # finally, if there is no music playing call self.next() to play the queue
+            vc = ctx.message.guild.voice_client
+            if vc is None or not vc.is_connected() or not vc.is_playing():
+                await self.next(ctx)
+                # TODO: Send a message stating that the player was successful
+            else:  # In this case, there is already a player, so we say we cant find that music to enqueue
+                outmsg = await ctx.message.channel.send(
+                    f"{EMOJIS['fail']}Either that peice of music doesnt exist or the url is invalid")
+        await self.del_msgs(
+            ctx.message,
+            outmsg
+        )
 
     @discjockey.command()
     @is_in_voice_channel()
@@ -187,71 +221,138 @@ class DiscJockey:
         Add a song to the music queue
         :param name_or_url: Name of song in music collection or a direct playable URL
         """
-        request = self.saved_music.find_one({'name': name_or_url})  # attempt to fetch the requested music
-        if request is not None:  # check if it found an entry
-            # enqueue the requested music entry from database
-            job = {
-                'startTime': None,
-                'endTime': None,
-                'createdOn': datetime.datetime.now(),
-                'priority': 1,
-                'payload': request
-            }
-            result = self.music_queue.insert_one(job)
-            if result:
-                await ctx.message.channel.send("Submitted to queue.")
-        elif bool(urllib.parse.urlparse(name_or_url).scheme):  # else, check if name is a URL
-            # enqueue the url without saving it in the database
-            payload = {
-                'name': "placeholder",
-                'url': name_or_url,
-                'desc': "",
-                'createdby': self.bot.user.id,
-                'datecreated': datetime.datetime.now()
-            }
-            job = {
-                'startTime': None,
-                'endTime': None,
-                'createdOn': datetime.datetime.now(),
-                'priority': 1,
-                'payload': payload
-            }
-            result = self.music_queue.insert_one(job)
-            if result:
-                await ctx.message.channel.send("Submitted to queue.")
+        outmsg = None
+        async with ctx.message.channel.typing():
+            request = self.saved_music.find_one({'name': name_or_url})  # attempt to fetch the requested music
+            if request is not None:  # check if it found an entry
+                # enqueue the requested music entry from database
+                job = {
+                    'startTime': None,
+                    'endTime': None,
+                    'createdOn': datetime.datetime.now(),
+                    'priority': 1,
+                    'payload': request
+                }
+                result = self.music_queue.insert_one(job)
+                if result:
+                    outmsg = await ctx.message.channel.send(f"{EMOJIS['success']}Submitted to queue.")
+            elif bool(urllib.parse.urlparse(name_or_url).scheme):  # else, check if name is a URL
+                # enqueue the url without saving it in the database
+                ytdl_result = ytdl.extract_info(name_or_url, download=False)
+                payload = {
+                    'name': ytdl_result['title'].lower(),
+                    'url': name_or_url,
+                    'desc': ytdl_result['title'],
+                    'createdby': self.bot.user.id,
+                    'datecreated': datetime.datetime.now(),
+                    'metadata': ytdl_result
+                }
+                job = {
+                    'startTime': None,
+                    'endTime': None,
+                    'createdOn': datetime.datetime.now(),
+                    'priority': 1,
+                    'payload': payload
+                }
+                result = self.music_queue.insert_one(job)
+                if result:
+                    outmsg = await ctx.message.channel.send(f"{EMOJIS['success']}Submitted to queue.")
+            else:
+                outmsg = await ctx.message.channel.send(f"{EMOJIS['fail']}Could not queue {name_or_url}.")
+        await self.del_msgs(
+            ctx.message,
+            outmsg
+        )
 
-    @discjockey.command(pass_context=True)
+    @discjockey.command()
     @is_in_voice_channel()
     async def deq(self, ctx, name):
         """
         Remove a song from the music queue
         :param name: Name of song to dequeue
         """
-        # TODO: Pop a song from the music queue using self.music_queue.delete_one
-        deleted = self.music_queue.delete_one({'name': name})
-        if deleted:
-            ctx.message.channel.send("Removed from queue.")
+        outmsg = None
+        async with ctx.message.channel.typing():
+            deleted = self.music_queue.delete_one({'payload.name': name})
+            found = self.music_queue.find_one({'payload.name': name})
+            if not found:
+                self.logger.debug(f"Deleted {name} from queue")
+                outmsg = await ctx.message.channel.send(f"{EMOJIS['success']}Removed {name} from queue.")
+            else:
+                outmsg = await ctx.message.channel.send(f"{EMOJIS['fail']}Could not remove {name} from queue.")
+        await self.del_msgs(
+            ctx.message,
+            outmsg
+        )
 
-    @discjockey.command(pass_context=True)
+    @discjockey.command()
     @is_in_voice_channel()
     async def skip(self, ctx):  # FUTURE: vote skip functionality instead of outright skip, admin could override vote
         """Skip the current playing song"""
-        # TODO: Stop the current player and closeout the current job then call self.next()
+        outmsg = None
+        async with ctx.message.channel.typing():
+            # TODO: Stop the current player and closeout the current job then call self.next()
+            vc = ctx.message.guild.voice_client
+            if vc is not None:
+                vc.stop()
+                outmsg = await ctx.message.channel.send(f"{EMOJIS['success']}Skipped current song.")
+            else:
+                outmsg = await ctx.message.channel.send(f"{EMOJIS['fail']}No music playing to skip.")
+        await self.del_msgs(
+            ctx.message,
+            outmsg
+        )
 
-    @discjockey.command(pass_context=True)
+    @discjockey.command()
     @is_in_voice_channel()
     @commands.has_any_role("Admin", "Admins", "Moderator", "Moderators")
     async def stop(self, ctx):
-        """Stop a bot from playing. Keeps queue intact"""
-        # TODO: Stop the current player and find a way to stop the bot from fetching jobs form the queue temporarily
+        """Stop a bot from playing. Clears queue"""
+        outmsg = None
+        async with ctx.message.channel.typing():
+            vc = ctx.message.guild.voice_client
+            self.music_queue.delete_many({})
+            if vc is not None:
+                vc.stop()
+                outmsg = await ctx.message.channel.send(f"{EMOJIS['success']}Stopped all music and cleared the queue.")
+            else:
+                outmsg = await ctx.message.channel.send(f"{EMOJIS['fail']}No music playing. Queue cleared.")
+        await self.del_msgs(
+            ctx.message,
+            outmsg
+        )
 
-    @discjockey.command(pass_context=True)
+    @discjockey.command()
     @is_in_voice_channel()
-    @commands.has_any_role("Admin", "Admins", "Moderator", "Moderators")
-    async def clear(self, ctx):
-        """Stops and clears the bot's queue"""
-        self.music_queue.delete_many({})  # Removes all documents from the queue collection
-        self.stop(ctx)
+    async def pause(self, ctx):
+        outmsg = None
+        async with ctx.message.channel.typing():
+            vc = ctx.message.guild.voice_client
+            if vc is not None and vc.is_playing():
+                vc.pause()
+                outmsg = await ctx.message.channel.send(f"{EMOJIS['success']}Music paused.")
+            else:
+                outmsg = await ctx.message.channel.send(f"{EMOJIS['fail']}No music playing.")
+        await self.del_msgs(
+            ctx.message,
+            outmsg
+        )
+
+    @discjockey.command()
+    @is_in_voice_channel()
+    async def resume(self, ctx):
+        outmsg = None
+        async with ctx.message.channel.typing():
+            vc = ctx.message.guild.voice_client
+            if vc is not None and not vc.is_playing():
+                vc.resume()
+                outmsg = await ctx.message.channel.send(f"{EMOJIS['success']}Music resumed.")
+            else:
+                outmsg = await ctx.message.channel.send(f"{EMOJIS['fail']}No music to resume")
+        await self.del_msgs(
+            ctx.message,
+            outmsg
+        )
 
     async def next(self, ctx):  # this function is to be used as a callback in a discord StreamPlayer, see ytdl() below.
         """Play the next music in the queue"""
@@ -265,7 +366,7 @@ class DiscJockey:
             sort=[('createdOn', 1)]
         )
         if job is None:
-            await ctx.message.channel.send("No music in the queue!")
+            await ctx.message.channel.send(f"{EMOJIS['fail']}No music in the queue!")
         else:
             await self.ytdl(ctx, job['payload']['url'], after=self.next, job=job, vc=voice_client)
 
@@ -286,21 +387,28 @@ class DiscJockey:
             if after is not None:
                 await after(ctx)  # call the callback function we were passed and give it the context
             if e:
-                ctx.send("Error playing audio: {}".format(e))
+                await ctx.message.channel.send(f"{EMOJIS['fail']}Error playing audio: {e}")
         try:
             player = await YTDLSource.from_url(url, loop=self.bot.loop)
             vc.play(player, after=_after)
         except discord.errors.ClientException as e:
-            await self.bot.send_message(ctx.message.channel, content=str(e))
+            await ctx.message.channel.send(EMOJIS['fail'] + str(e))
 
-    @staticmethod
-    async def del_msgs(*args, delay=5):
+    async def del_msgs(self, *args: discord.Message, delay: int = 3):
         """
         Delete messages with 5 second delay
         :param args: discord.Message objects to be deleted
         :param delay: Delay in seconds (int)
         :return: None
         """
+        await asyncio.sleep(
+            delay
+        )
+        for msg in args:
+            try:
+                await msg.delete()
+            except AttributeError:  # handle msg == None
+                pass
 
 
 def setup(bot):
