@@ -7,13 +7,29 @@ from discord.ext import commands
 from djbot import logger_setup
 
 
+def is_admin_or_mod():
+    def predicate(ctx):
+        msg = ctx.message
+        ch = msg.channel
+        names = ["Admin", "Admins", "Moderator", "Moderators"]
+        if not any(discord.utils.get(msg.author.roles, name=name) for name in names):
+            raise NotAnAdmin(f"{EMOJIS['fail']} You are not permitted to run this command!")
+        return True
+
+    return commands.check(predicate)
+
+
+class NotAnAdmin(commands.CheckFailure):
+    pass
+
+
 class Utils:
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.logger = logger_setup(self.__class__.__name__)
 
     @commands.command(hidden=True, pass_context=True)
-    @commands.has_any_role("Admin", "Admins", "Moderator", "Moderators")
+    @is_admin_or_mod()
     async def clear(self, ctx, count):
         """Clear a chat channel of X lines"""
         async with ctx.message.channel.typing():
@@ -32,8 +48,11 @@ class Utils:
         )
 
     @commands.command(name="eval")
-    async def _eval(self, ctx, code: str):
-        actual_code = code
+    @commands.is_owner()
+    async def _eval(self, ctx):
+        code = '\n'.join(ctx.message.content.split('\n')[1:-1])
+        self.logger.debug(f"evaulating code:\n{code}")
+        await ctx.send(eval(code, globals(), locals()))
 
     async def del_msgs(self, *args: discord.Message, delay: int=3):
         """
