@@ -266,7 +266,6 @@ class DiscJockey:
             embed.add_field(name="Likes", value=song['metadata']['like_count'])
             embed.add_field(name="Dislikes", value=song['metadata']['dislike_count'])
             await ctx.send(embed=embed)
-        # TODO: Embed the output to make it pretty
 
     @discjockey.command()
     @is_admin_or_mod()
