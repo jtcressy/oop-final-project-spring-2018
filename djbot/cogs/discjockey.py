@@ -12,10 +12,20 @@ from djbot import logger_setup, get_dbclient
 # also pass if there is no voice channel
 def is_in_voice_channel():
     def predicate(ctx):
-        voice_client = ctx.bot.voice_client_in(ctx.message.server)
+        voice_client = ctx.bot.voice_client_in(ctx.message.guild)
         return voice_client is None or ctx.message.author.voice.voice_channel.id == voice_client.channel.id
 
     return commands.check(predicate)
+
+
+def typing(fn):
+    """Decorator to make bot send typing during command execution"""
+
+    async def predicate(*args, **kwargs):
+        async with ctx.message.channel.typing():
+            fn()
+
+    return predicate
 
 
 class DiscJockey:
@@ -32,16 +42,17 @@ class DiscJockey:
 
     #
     # TODO: Make command messages delete themselves *and* the user's command to avoid cluttering the chat channel
-    # TODO: Ensure that we send typing to channels for each command with "async with channel.typing():"
+    # TODO: Ensure that we send typing to channels for each command with "async with ctx.message.channel.typing():"
     #
 
-    @commands.group(name="dj", pass_context=True)
-    async def discjockey(self, ctx):
+    @commands.group(name="dj")
+    @typing
+    async def discjockey(self):
         """Disc Jockey commands"""
         self.music_queue = self.db.get_collection(f"{ctx.message.server.id}-music_queue")
         self.saved_music = self.db.get_collection(f"{ctx.message.server.id}-saved_music")
         if ctx.invoked_subcommand is None:
-            """Send status to channel"""
+            # Send status to channel
             # TODO: List the songs in the current music queue and the playing status
             player: discord.voice_client.StreamPlayer = self.players.get(ctx.message.server.id)
             if player is not None:
@@ -52,39 +63,74 @@ class DiscJockey:
 
     @discjockey.command(pass_context=True)
     async def save(self, ctx, name, url, desc=""):
-        """Save a song to the music collection"""
+        """
+        Save a song to the music collection
+        :param name: Name of the song
+        :param url: URL that points to playable media
+        :param desc: Optional: Describe the song
+        """
         entry = {
             'name' : name,
             'url': url,
+            'desc': desc,
             'createdby': ctx.message.author.id,
             'datecreated': datetime.datetime.now()
         }
         if self.saved_music.find_one({'name': entry.get('name')}):
-            await self.bot.say("That song is already saved.")
+            botmsg = await self.bot.say("That song is already saved.")
         elif bool(urllib.parse.urlparse(url).scheme):  # make sure url is a parsable url
             self.saved_music.insert_one(entry)
-            await self.bot.say(f"Saved {name} to the music collection.")
+            botmsg = await self.bot.say(f"Saved {name} to the music collection.")
+
+
+    @discjockey.command(pass_context=True)
+    @commands.has_any_role("Admin", "Admins", "Moderator", "Moderators")
+    async def delete(self, ctx, name):
+        """
+        Delete a song from the music collection
+        :param name: Name of song in music collection
+        """
+        # TODO
+
+    @discjockey.command(pass_context=True)
+    async def info(self, ctx, name):
+        """
+        Get details about a song in the music collection
+        :param name: Name of song in music collection
+        """
+        # TODO: Tabulate the output to make it pretty
+
+    @discjockey.command(pass_context=True)
+    async def list(self, ctx):
+        """List available songs in the music collection"""
+        # TODO
 
     @discjockey.command(pass_context=True)
     @is_in_voice_channel()
     async def play(self, ctx, name_or_url=None):
-        """Play a song, add to the queue, or resume playing an existing queue"""
-        async with ctx.message.channel.typing():
-            if name_or_url:
-                self.enq(ctx, name_or_url)  # "play" is a wrapper for "enq" if you pass it a name or url to play
-            # finally, if there is no music playing call self.next() to play the queue
-            player: discord.voice_client.StreamPlayer = self.players[ctx.message.server.id]
-            if player is None or not player.is_alive() or not player.is_done():
-                await self.next(ctx)
-                # TODO: Send a message stating that the player was successful
-            else:  # In this case, there is already a player, so we say we cant find that music to enqueue
-                await self.bot.send_message(ctx.message.channel,
-                                            "Either that peice of music doesnt exist or the url is invalid")
+        """
+        Play or enqueue a song by name or url, or just resume playing original queue
+        :param name_or_url: Optional, name of song or url
+        """
+        await self.bot.send_typing(ctx.message.channel)
+        if name_or_url:
+            self.enq(ctx, name_or_url)  # "play" is a wrapper for "enq" if you pass it a name or url to play
+        # finally, if there is no music playing call self.next() to play the queue
+        player: discord.voice_client.StreamPlayer = self.players[ctx.message.server.id]
+        if player is None or not player.is_alive() or not player.is_done():
+            await self.next(ctx)
+            # TODO: Send a message stating that the player was successful
+        else:  # In this case, there is already a player, so we say we cant find that music to enqueue
+            await self.bot.send_message(ctx.message.channel,
+                                        "Either that peice of music doesnt exist or the url is invalid")
 
     @discjockey.command(pass_context=True)
     @is_in_voice_channel()
     async def enq(self, ctx, name_or_url):
-        """Add a song to the music queue by name or url"""
+        """
+        Add a song to the music queue
+        :param name_or_url: Name of song in music collection or a direct playable URL
+        """
         request = self.saved_music.find_one({'name': name_or_url})  # attempt to fetch the requested music
         if request is not None:  # check if it found an entry
             # enqueue the requested music entry from database
@@ -118,7 +164,10 @@ class DiscJockey:
     @discjockey.command(pass_context=True)
     @is_in_voice_channel()
     async def deq(self, ctx, name):
-        """Remove a song from the music queue"""
+        """
+        Remove a song from the music queue
+        :param name: Name of song to dequeue
+        """
         # TODO: Pop a song from the music queue using self.music_queue.delete_one
 
     @discjockey.command(pass_context=True)
@@ -156,7 +205,14 @@ class DiscJockey:
         await self.ytdl(ctx, job['payload']['url'], after=self.next, job=job)
 
     async def ytdl(self, ctx, url, after, job):
-        """Create a ytdl player with the given url, callback and job and closeout the job after music is done playing"""
+        """
+        Create a ytdl player and play music
+        :param ctx: context of original command
+        :param url: url pointing to music/video
+        :param after: callback function to run after playback completes
+        :param job: dict representing a job in a mongodb queue
+        :return: None
+        """
         music_queue = self.music_queue
 
         async def _after():  # this function is called when the player finishes
@@ -173,6 +229,15 @@ class DiscJockey:
             self.players[ctx.message.server.id].volume = 0.10
         except discord.errors.ClientException as e:
             await self.bot.send_message(ctx.message.channel, content=str(e))
+
+    @staticmethod
+    async def del_msgs(*args, delay=5):
+        """
+        Delete messages with 5 second delay
+        :param args: discord.Message objects to be deleted
+        :param delay: Delay in seconds (int)
+        :return: None
+        """
 
 
 def setup(bot):
