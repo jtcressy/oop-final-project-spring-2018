@@ -133,6 +133,9 @@ class DiscJockey:
             'createdby': ctx.message.author.id,
             'datecreated': datetime.datetime.now()
         }
+
+        self.bot.delete_message(ctx.message)
+
         if self.saved_music.find_one({'name': entry.get('name')}):
             botmsg = await self.bot.say("That song is already saved.")
         elif bool(urllib.parse.urlparse(url).scheme):  # make sure url is a parsable url
@@ -147,7 +150,10 @@ class DiscJockey:
         Delete a song from the music collection
         :param name: Name of song in music collection
         """
-        # TODO
+
+        self.bot.delete_message(ctx.message)
+        if self.saved_music.find_one({'name': name}):
+            self.saved_music.delete_one({'name': name})
 
     @discjockey.command(pass_context=True)
     async def info(self, ctx, name):
@@ -155,11 +161,14 @@ class DiscJockey:
         Get details about a song in the music collection
         :param name: Name of song in music collection
         """
+
+        self.bot.delete_message(ctx.message)
         # TODO: Tabulate the output to make it pretty
 
     @discjockey.command(pass_context=True)
     async def list(self, ctx):
         """List available songs in the music collection"""
+        self.bot.delete_message(ctx.message)
         # TODO
 
     @discjockey.command(pass_context=True)
@@ -169,13 +178,15 @@ class DiscJockey:
         Play or enqueue a song by name or url, or just resume playing original queue
         :param name_or_url: Optional, name of song or url
         """
+        self.bot.delete_message(ctx.message)
         if name_or_url:
             self.enq(ctx, name_or_url)  # "play" is a wrapper for "enq" if you pass it a name or url to play
         # finally, if there is no music playing call self.next() to play the queue
         vc = ctx.message.guild.voice_client
         if vc is None or not vc.is_connected() or not vc.is_playing():
             await self.next(ctx)
-            # TODO: Send a message stating that the player was successful
+            #TODO: use youtube-dl to list name of video
+            await self.bot.say(f"Now playing {name_or_url}")
         else:  # In this case, there is already a player, so we say we cant find that music to enqueue
             await self.bot.send_message(ctx.message.channel,
                                         "Either that peice of music doesnt exist or the url is invalid")
@@ -187,6 +198,7 @@ class DiscJockey:
         Add a song to the music queue
         :param name_or_url: Name of song in music collection or a direct playable URL
         """
+        self.bot.delete_message(ctx.message)
         request = self.saved_music.find_one({'name': name_or_url})  # attempt to fetch the requested music
         if request is not None:  # check if it found an entry
             # enqueue the requested music entry from database
@@ -199,7 +211,7 @@ class DiscJockey:
             }
             result = self.music_queue.insert_one(job)
             if result:
-                await ctx.message.channel.send("Submitted to queue.")
+                await ctx.message.channel.send(f"Queued up {name_or_url}.")
         elif bool(urllib.parse.urlparse(name_or_url).scheme):  # else, check if name is a URL
             # enqueue the url without saving it in the database
             payload = {
@@ -218,7 +230,7 @@ class DiscJockey:
             }
             result = self.music_queue.insert_one(job)
             if result:
-                await ctx.message.channel.send("Submitted to queue.")
+                await ctx.message.channel.send(f"Queued up {payload['name']}")
 
     @discjockey.command(pass_context=True)
     @is_in_voice_channel()
@@ -250,6 +262,7 @@ class DiscJockey:
     @commands.has_any_role("Admin", "Admins", "Moderator", "Moderators")
     async def clear(self, ctx):
         """Stops and clears the bot's queue"""
+        self.bot.delete_message(ctx.message)
         self.music_queue.delete_many({})  # Removes all documents from the queue collection
         self.stop(ctx)
 
