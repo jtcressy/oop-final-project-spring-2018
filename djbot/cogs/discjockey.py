@@ -96,7 +96,11 @@ class DiscJockey:
                 'payload': request
             }
             result = self.music_queue.insert_one(job)
+
+            await self.bot.say(f"Queued {payload.name} for playing.")
             # TODO: Send message that the song was queued by checking result
+
+            await self.bot.say(f"Queued up {name_or_url}")
         elif bool(urllib.parse.urlparse(name_or_url).scheme):  # else, check if name is a URL
             # enqueue the url without saving it in the database
             payload = {
@@ -113,13 +117,17 @@ class DiscJockey:
                 'payload': payload
             }
             result = self.music_queue.insert_one(job)
+
+            await self.bot.say(f"Queued {payload.name} for playing.")
             # TODO: Send message that the song was queued by checking result
 
     @discjockey.command(pass_context=True)
     @is_in_voice_channel()
     async def deq(self, ctx, name):
         """Remove a song from the music queue"""
-        # TODO: Pop a song from the music queue using self.music_queue.delete_one
+        request =self.saved_music.find_one({'name': name})
+        if request is not None:
+            self.music_queue.delete_one({'name' : name})
 
     @discjockey.command(pass_context=True)
     @is_in_voice_channel()
