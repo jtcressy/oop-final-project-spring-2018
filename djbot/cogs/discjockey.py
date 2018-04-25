@@ -1,8 +1,11 @@
+import asyncio
 import datetime
 import urllib.parse
 
 import discord
+import discord.utils
 import pymongo
+import youtube_dl
 from discord.ext import commands
 
 from djbot import logger_setup, get_dbclient
@@ -12,8 +15,8 @@ from djbot import logger_setup, get_dbclient
 # also pass if there is no voice channel
 def is_in_voice_channel():
     def predicate(ctx):
-        voice_client = ctx.bot.voice_client_in(ctx.message.guild)
-        return voice_client is None or ctx.message.author.voice.voice_channel.id == voice_client.channel.id
+        voice_client = ctx.message.guild.voice_client
+        return voice_client is None or ctx.message.author.voice.channel.id == voice_client.channel.id
 
     return commands.check(predicate)
 
@@ -22,10 +25,57 @@ def typing(fn):
     """Decorator to make bot send typing during command execution"""
 
     async def predicate(*args, **kwargs):
-        async with ctx.message.channel.typing():
+        async with ctx.typing():
             fn()
 
     return predicate
+
+
+# Suppress noise about console usage from errors
+youtube_dl.utils.bug_reports_message = lambda: ''
+
+ytdl_format_options = {
+    'format': 'bestaudio/best',
+    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+    'restrictfilenames': True,
+    'noplaylist': True,
+    'nocheckcertificate': True,
+    'ignoreerrors': False,
+    'logtostderr': False,
+    'quiet': True,
+    'no_warnings': True,
+    'default_search': 'auto',
+    'source_address': '0.0.0.0'  # bind to ipv4 since ipv6 addresses cause issues sometimes
+}
+
+ffmpeg_options = {
+    'before_options': '-nostdin',
+    'options': '-vn'
+}
+
+ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
+
+
+class YTDLSource(discord.PCMVolumeTransformer):
+    def __init__(self, source, *, data, volume=0.5):
+        super().__init__(source, volume)
+
+        self.data = data
+
+        self.title = data.get('title')
+        self.url = data.get('url')
+
+    @classmethod
+    async def from_url(cls, url, *, loop=None, stream=False):
+        loop = loop or asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
+
+        if 'entries' in data:
+            # take first item from a playlist
+            data = data['entries'][0]
+
+        filename = data['url'] if stream else ytdl.prepare_filename(data)
+        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
 
 class DiscJockey:
@@ -38,7 +88,6 @@ class DiscJockey:
         # populate these variables at command invocation
         self.music_queue: pymongo.collection.Collection = None
         self.saved_music: pymongo.collection.Collection = None
-        self.players = {}
 
     #
     # TODO: Make command messages delete themselves *and* the user's command to avoid cluttering the chat channel
@@ -46,20 +95,28 @@ class DiscJockey:
     #
 
     @commands.group(name="dj")
-    @typing
-    async def discjockey(self):
+    async def discjockey(self, ctx):
+        import tabulate
         """Disc Jockey commands"""
-        self.music_queue = self.db.get_collection(f"{ctx.message.server.id}-music_queue")
-        self.saved_music = self.db.get_collection(f"{ctx.message.server.id}-saved_music")
+        self.music_queue = self.db.get_collection(f"{ctx.message.guild.id}-music_queue")
+        self.saved_music = self.db.get_collection(f"{ctx.message.guild.id}-saved_music")
         if ctx.invoked_subcommand is None:
-            # Send status to channel
-            # TODO: List the songs in the current music queue and the playing status
-            player: discord.voice_client.StreamPlayer = self.players.get(ctx.message.server.id)
-            if player is not None:
-                if player.is_playing():
-                    voice_client = self.bot.voice_client_in(ctx.message.server)
-                    await self.bot.send_message(ctx.message.channel,
-                                                f"Currently playing in #{voice_client.channel.name}")
+            queue = self.music_queue.find(sort=[('createdOn', 1)])
+            headers = ["Name", "Description", "Played", "Playing"]
+            rows = []
+            self.logger.debug(f"Current music queue for {ctx.message.guild.name}:")
+            for job in queue:
+                self.logger.debug(str(job))
+                playing = False
+                played = False
+                if job['startTime'] is not None:
+                    played = True
+                    playing = True
+                    if job['endTime'] is not None:
+                        playing = False
+                rows.append([job['payload']['name'], job['payload']['desc'], str(played), str(playing)])
+            output = tabulate.tabulate(rows, headers)
+            await ctx.message.channel.send("```" + output + "```")
 
     @discjockey.command(pass_context=True)
     async def save(self, ctx, name, url, desc=""):
@@ -122,12 +179,11 @@ class DiscJockey:
         :param name_or_url: Optional, name of song or url
         """
         self.bot.delete_message(ctx.message)
-        await self.bot.send_typing(ctx.message.channel)
         if name_or_url:
             self.enq(ctx, name_or_url)  # "play" is a wrapper for "enq" if you pass it a name or url to play
         # finally, if there is no music playing call self.next() to play the queue
-        player: discord.voice_client.StreamPlayer = self.players[ctx.message.server.id]
-        if player is None or not player.is_alive() or not player.is_done():
+        vc = ctx.message.guild.voice_client
+        if vc is None or not vc.is_connected() or not vc.is_playing():
             await self.next(ctx)
             #TODO: use youtube-dl to list name of video
             await self.bot.say(f"Now playing {name_or_url}")
@@ -135,7 +191,7 @@ class DiscJockey:
             await self.bot.send_message(ctx.message.channel,
                                         "Either that peice of music doesnt exist or the url is invalid")
 
-    @discjockey.command(pass_context=True)
+    @discjockey.command()
     @is_in_voice_channel()
     async def enq(self, ctx, name_or_url):
         """
@@ -154,16 +210,15 @@ class DiscJockey:
                 'payload': request
             }
             result = self.music_queue.insert_one(job)
-
-            await self.bot.say(f"Queued {payload.name} for playing.")
-
-            await self.bot.say(f"Queued up {name_or_url}")
+            if result:
+                await ctx.message.channel.send(f"Queued up {name_or_url}.")
         elif bool(urllib.parse.urlparse(name_or_url).scheme):  # else, check if name is a URL
             # enqueue the url without saving it in the database
             payload = {
                 'name': "placeholder",
                 'url': name_or_url,
-                'createdby': self.bot.connection.user.id,
+                'desc': "",
+                'createdby': self.bot.user.id,
                 'datecreated': datetime.datetime.now()
             }
             job = {
@@ -174,18 +229,20 @@ class DiscJockey:
                 'payload': payload
             }
             result = self.music_queue.insert_one(job)
-
-            await self.bot.say(f"Queued {payload.name} for playing.")
-            # TODO: Send message that the song was queued by checking result
+            if result:
+                await ctx.message.channel.send(f"Queued up {payload['name']}")
 
     @discjockey.command(pass_context=True)
     @is_in_voice_channel()
     async def deq(self, ctx, name):
-        """Remove a song from the music queue"""
-        self.bot.delete_message(ctx.message)
-        request = self.saved_music.find_one({'name': name})
-        if request is not None:
-            self.music_queue.delete_one({'name' : name})
+        """
+        Remove a song from the music queue
+        :param name: Name of song to dequeue
+        """
+        # TODO: Pop a song from the music queue using self.music_queue.delete_one
+        deleted = self.music_queue.delete_one({'name': name})
+        if deleted:
+            ctx.message.channel.send("Removed from queue.")
 
     @discjockey.command(pass_context=True)
     @is_in_voice_channel()
@@ -211,18 +268,21 @@ class DiscJockey:
 
     async def next(self, ctx):  # this function is to be used as a callback in a discord StreamPlayer, see ytdl() below.
         """Play the next music in the queue"""
-        voice_client = self.bot.voice_client_in(ctx.message.server)
+        voice_client = ctx.message.guild.voice_client
         if voice_client is None:
-            await self.bot.join_voice_channel(ctx.message.author.voice.voice_channel)
+            voice_client = await ctx.message.author.voice.channel.connect()
         job = self.music_queue.find_one_and_update(
             # Get the oldest job that has not been started yet and set its startTime to mark it as started
             {'startTime': None},
             {'$set': {'startTime': datetime.datetime.now()}},
-            sort={'createdOn': 1}
+            sort=[('createdOn', 1)]
         )
-        await self.ytdl(ctx, job['payload']['url'], after=self.next, job=job)
+        if job is None:
+            await ctx.message.channel.send("No music in the queue!")
+        else:
+            await self.ytdl(ctx, job['payload']['url'], after=self.next, job=job, vc=voice_client)
 
-    async def ytdl(self, ctx, url, after, job):
+    async def ytdl(self, ctx, url, after, job, vc=None):
         """
         Create a ytdl player and play music
         :param ctx: context of original command
@@ -233,18 +293,16 @@ class DiscJockey:
         """
         music_queue = self.music_queue
 
-        async def _after():  # this function is called when the player finishes
+        async def _after(e):  # this function is called when the player finishes
             # update the job with an endtime to mark it as done
             music_queue.update_one({'_id': job['_id']}, {'$set': {'endTime': datetime.datetime.now()}})
             if after is not None:
                 await after(ctx)  # call the callback function we were passed and give it the context
+            if e:
+                ctx.send("Error playing audio: {}".format(e))
         try:
-            self.players[ctx.message.server.id] = await self.bot.voice_client_in(ctx.message.server).create_ytdl_player(
-                url,
-                after=_after  # we pass the above function as a callback
-            )
-            self.players[ctx.message.server.id].start()
-            self.players[ctx.message.server.id].volume = 0.10
+            player = await YTDLSource.from_url(url, loop=self.bot.loop)
+            vc.play(player, after=_after)
         except discord.errors.ClientException as e:
             await self.bot.send_message(ctx.message.channel, content=str(e))
 

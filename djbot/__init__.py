@@ -1,12 +1,12 @@
-from discord.ext import commands
-import discord
-import pkgutil
-from os import environ
-from pymongo import MongoClient
-import pymongo.uri_parser
-import urllib.parse
 import logging
+import pkgutil
 import sys
+from os import environ
+
+import discord
+from discord.ext import commands
+from pymongo import MongoClient
+
 import djbot.cogs
 
 MODULE_EXTENSIONS = ('.py', '.pyc', '.pyo')
@@ -50,7 +50,7 @@ def logger_setup(cog_name=__name__, log_level=logging.INFO):
         "INFO": logging.INFO,
         "DEBUG": logging.DEBUG,
     }
-    loglevel = loglevels.get(environ.get("NSABOT_LOGLEVEL", "INFO").upper(), log_level)
+    loglevel = loglevels.get(environ.get("DISCORDBOT_LOGLEVEL", "INFO").upper(), log_level)
     logger.setLevel(loglevel)
     for handler in logger.handlers:
         if isinstance(handler, logging.FileHandler):
@@ -104,7 +104,7 @@ async def on_ready():
     joinlink = f"https://discordapp.com/oauth2/authorize?client_id={app_info.id}&scope=bot&permissions=0"
     joinmsg = f"This bot is currently not joined to any servers. Join me to a server by following this link: {joinlink}"
     logger.debug(f"Invite bot to servers using this link: {joinlink}")
-    if len(bot.servers) < 1:
+    if len(bot.guilds) < 1:
         logger.warning(joinmsg)
 
 
