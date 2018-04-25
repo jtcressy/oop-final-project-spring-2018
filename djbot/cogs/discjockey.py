@@ -122,11 +122,6 @@ class DiscJockey:
         self.music_queue: pymongo.collection.Collection = None
         self.saved_music: pymongo.collection.Collection = None
 
-    #
-    # TODO: Make command messages delete themselves *and* the user's command to avoid cluttering the chat channel
-    # TODO: Ensure that we send typing to channels for each command with "async with ctx.message.channel.typing():"
-    #
-
     @commands.group(name="dj")
     async def discjockey(self, ctx):
         """Disc Jockey commands"""
@@ -452,7 +447,6 @@ class DiscJockey:
         """Skip the current playing song"""
         outmsg = None
         async with ctx.message.channel.typing():
-            # TODO: Stop the current player and closeout the current job then call self.next()
             vc = ctx.message.guild.voice_client
             if vc.is_playing():
                 vc.stop()
