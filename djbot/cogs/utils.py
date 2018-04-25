@@ -1,11 +1,13 @@
-import discord
-import logging
 import asyncio
+import logging
+
+import discord
 from discord.ext import commands
+
 from djbot import logger_setup
 
 
-class Misc:
+class Utils:
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.logger = logger_setup(self.__class__.__name__)
@@ -29,6 +31,10 @@ class Misc:
             delay=5
         )
 
+    @commands.command(name="eval")
+    async def _eval(self, ctx, code: str):
+        actual_code = code
+
     async def del_msgs(self, *args: discord.Message, delay: int=3):
         """
         Delete messages with 5 second delay
@@ -47,4 +53,4 @@ class Misc:
 
 
 def setup(bot: discord.ext.commands.Bot):
-    bot.add_cog(Misc(bot))
+    bot.add_cog(Utils(bot))

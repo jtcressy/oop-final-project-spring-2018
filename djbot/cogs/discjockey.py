@@ -144,14 +144,14 @@ class DiscJockey:
                         [
                             job['payload']['name'],
                             job['payload']['desc'],
-                            job['payload']['metadata']['duration'],
+                            str(datetime.timedelta(seconds=int(job['payload']['metadata']['duration']))),
                             playing,
                             played
                         ]
 
                     )
                 output = tabulate.tabulate(rows, headers)
-                await ctx.message.channel.send("```" + output + "```")
+                await ctx.message.channel.send(f"Current queue of music:\n```{output}```")
 
     async def __error(self, ctx, error):
         self.logger.debug(f"Got error {type(error)}: {error}")
@@ -184,7 +184,8 @@ class DiscJockey:
             entry = {
                 'name': name,
                 'url': url,
-                'desc': ytdl_result['title'] if desc is None else desc,
+                'desc': ''.join(filter(lambda x: x in set(string.printable),
+                                       ytdl_result['title'][:30])).strip() if desc is None else desc,
                 'createdby': ctx.message.author.id,
                 'datecreated': datetime.datetime.now(),
                 'metadata': ytdl_result
@@ -296,9 +297,10 @@ class DiscJockey:
                 # enqueue the url without saving it in the database
                 ytdl_result = ytdl.extract_info(name_or_url, download=False)
                 payload = {
-                    'name': ytdl_result['title'][:15].lower().translate(string.digits + string.ascii_letters).strip(),
+                    'name': ''.join(
+                        filter(lambda x: x in set(string.ascii_letters), ytdl_result['title'][:15].lower())).strip(),
                     'url': name_or_url,
-                    'desc': ytdl_result['title'][:30],
+                    'desc': ''.join(filter(lambda x: x in set(string.printable), ytdl_result['title'][:30])).strip(),
                     'createdby': self.bot.user.id,
                     'datecreated': datetime.datetime.now(),
                     'metadata': ytdl_result
