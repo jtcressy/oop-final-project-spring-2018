@@ -165,7 +165,6 @@ class DiscJockey:
                     delay=15
                 )
 
-
     async def __error(self, ctx, error):
         self.logger.debug(f"Got error {type(error)}: {error}")
         if any([isinstance(error, NotInVoiceChannel), isinstance(error, NotAnAdmin),
@@ -255,6 +254,18 @@ class DiscJockey:
         async with ctx.message.channel.typing():
             embed = discord.Embed()
             song = self.saved_music.find_one({"name": name})
+            embed.colour = discord.Colour.red()
+            embed.title = song['metadata']['title']
+            embed.description = song['metadata']['description']
+            embed.url = song['metadata']['webpage_url']
+            embed.set_image(url=song['metadata']['thumbnail'])
+            embed.add_field(name="Tags", value=', '.join([tag for tag in song['metadata']['tags']]))
+            embed.add_field(name="Duration", value="{:02}:{:02}".format(int(song['metadata']['duration']) // 60,
+                                                                        int(song['metadata']['duration']) % 60))
+            embed.add_field(name="Views", value=song['metadata']['view_count'])
+            embed.add_field(name="Likes", value=song['metadata']['like_count'])
+            embed.add_field(name="Dislikes", value=song['metadata']['dislike_count'])
+            await ctx.send(embed=embed)
         # TODO: Embed the output to make it pretty
 
     @discjockey.command()
@@ -366,7 +377,7 @@ class DiscJockey:
                     payload = {
                         'name': ''.join(
                             filter(lambda x: x in set(string.ascii_letters),
-                                   ytdl_result['title'][:15].lower())).strip(),
+                                   ytdl_result['title'].lower())).strip()[:15],
                         'url': name_or_url,
                         'desc': ''.join(filter(lambda x: x in set(string.printable), ytdl_result['title'])).strip(),
                         'createdby': ctx.message.author.id,
@@ -552,7 +563,10 @@ class DiscJockey:
                 asyncio.run_coroutine_threadsafe(ctx.message.channel.send(f"{EMOJIS['fail']}Error playing audio: {e}"),
                                                  loop=self.bot.loop)
         try:
-            player = await YTDLSource.from_url(url, loop=self.bot.loop)
+            stream = False
+            if job['payload']['metadata']['is_live'] == "true":
+                stream = True
+            player = await YTDLSource.from_url(url, loop=self.bot.loop, stream=stream)
             vc.play(player, after=_after)
         except discord.errors.ClientException as e:
             await ctx.message.channel.send(EMOJIS['fail'] + str(e))
