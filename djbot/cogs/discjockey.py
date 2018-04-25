@@ -208,8 +208,10 @@ class DiscJockey:
         :param name: Name of song in music collection
         """
         async with ctx.message.channel.typing():
-            ""
-        # TODO
+            self.bot.delete_message(ctx.message)
+            if self.saved_music.find_one({'name': name}):
+                self.saved_music.delete_one({'name': name})
+                # TODO: send success message
 
     @discjockey.command()
     async def info(self, ctx, name):
