@@ -241,14 +241,24 @@ class DiscJockey:
                 )
 
     @discjockey.command()
-    async def info(self, ctx, name):
+    async def info(self, ctx, name=None):
         """
-        Get details about a song in the music collection
+        Get details about a song in the music collection or current playing song
         :param name: Name of song in music collection
         """
         async with ctx.message.channel.typing():
+            if name:
+                song = self.saved_music.find_one({"name": name})
+                if not song:
+                    song = self.music_queue.find_one({"payload.name": name}).get('payload')
+            else:
+                job = self.music_queue.find_one(  # find current playing song
+                    {'startTime': {'$exists': True}, 'endTime': None}
+                )
+                print(job)
+                if job:
+                    song = job.get('payload')
             embed = discord.Embed()
-            song = self.saved_music.find_one({"name": name})
             embed.colour = discord.Colour.red()
             embed.title = song['metadata']['title']
             embed.description = song['metadata']['description']
