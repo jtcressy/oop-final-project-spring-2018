@@ -255,7 +255,6 @@ class DiscJockey:
                 job = self.music_queue.find_one(  # find current playing song
                     {'startTime': {'$exists': True}, 'endTime': None}
                 )
-                print(job)
                 if job:
                     song = job.get('payload')
             embed = discord.Embed()
