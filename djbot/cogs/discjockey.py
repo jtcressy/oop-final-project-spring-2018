@@ -313,6 +313,29 @@ class DiscJockey:
 
     @discjockey.command()
     @is_in_voice_channel()
+    async def quit(self, ctx):
+        """Disconnect bot from voice channel"""
+        if ctx.guild.voice_client or not ctx.guild.voice_client.is_connected():
+            await ctx.guild.voice_client.disconnect()
+            if not ctx.guild.voice_client:
+                await self.del_msgs(
+                    ctx.message,
+                    await ctx.send(
+                        f"{EMOJIS['success']} Bye!"
+                    )
+                )
+            else:
+                await self.del_msgs(
+                    ctx.message,
+                    await ctx.send(
+                        f"{EMOJIS['fail']} Could not disconnect! Check the logs."
+                    )
+                )
+        else:
+            raise NotInVoiceChannel(f"{EMOJIS['fail']} No voice channel to disconnect from!")
+
+    @discjockey.command()
+    @is_in_voice_channel()
     async def play(self, ctx, name_or_url=None):
         """
         Play current queue or enqueue a song by name or url
